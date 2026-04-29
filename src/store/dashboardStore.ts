@@ -62,9 +62,19 @@ const seedCourses: Course[] = [
 
 const defaultPage: DashboardPage = {
   id: uid(),
-  name: 'My Dashboard',
+  name: 'Main Dashboard',
   widgets: [],
 };
+
+// ─── Grid constants ────────────────────────────────────────────────────────
+export const GRID_SIZE = 24;
+
+const snapToGrid = (value: number) => Math.round(value / GRID_SIZE) * GRID_SIZE;
+
+export interface CanvasBounds {
+  width: number;
+  height: number;
+}
 
 // ─── Store shape ────────────────────────────────────────────────────────────
 interface DashboardStore {
@@ -72,15 +82,29 @@ interface DashboardStore {
   pages: DashboardPage[];
   activePageId: string;
   addPage: (name: string) => void;
+  duplicatePage: (id: string, name: string) => void;
   removePage: (id: string) => void;
   renamePage: (id: string, name: string) => void;
   setActivePage: (id: string) => void;
 
+  // Edit mode
+  isEditing: boolean;
+  setIsEditing: (editing: boolean) => void;
+
   // Widgets
   addWidget: (type: WidgetType) => void;
+  addWidgetAtPosition: (type: WidgetType, x: number, y: number, bounds: CanvasBounds) => boolean;
   removeWidget: (id: string) => void;
   updateWidget: (id: string, patch: Partial<Widget>) => void;
   bringToFront: (id: string) => void;
+  canPlaceWidget: (
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    bounds: CanvasBounds,
+    excludeId?: string,
+  ) => boolean;
 
   // Shared data
   tasks: Task[];
@@ -98,6 +122,67 @@ interface DashboardStore {
 
   courses: Course[];
 }
+
+const findNearestPlacement = (
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  bounds: CanvasBounds,
+  pageWidgets: Widget[],
+  excludeId?: string,
+) => {
+  const originX = snapToGrid(x);
+  const originY = snapToGrid(y);
+  const maxX = Math.max(0, bounds.width - width);
+  const maxY = Math.max(0, bounds.height - height);
+  const maxCols = Math.floor(maxX / GRID_SIZE);
+  const maxRows = Math.floor(maxY / GRID_SIZE);
+
+  const candidates: Array<{ x: number; y: number; distance: number }> = [];
+
+  for (let row = 0; row <= maxRows; row += 1) {
+    for (let col = 0; col <= maxCols; col += 1) {
+      const candidateX = col * GRID_SIZE;
+      const candidateY = row * GRID_SIZE;
+      const distance = Math.abs(candidateX - originX) + Math.abs(candidateY - originY);
+      candidates.push({ x: candidateX, y: candidateY, distance });
+    }
+  }
+
+  candidates.sort((a, b) => {
+    if (a.distance !== b.distance) return a.distance - b.distance;
+    if (a.y !== b.y) return a.y - b.y;
+    return b.x - a.x;
+  });
+
+  for (const candidate of candidates) {
+    const withinBounds =
+      candidate.x >= 0 &&
+      candidate.y >= 0 &&
+      candidate.x + width <= bounds.width &&
+      candidate.y + height <= bounds.height;
+
+    if (!withinBounds) continue;
+
+    const collides = pageWidgets.some((widget) => {
+      if (excludeId && widget.id === excludeId) return false;
+
+      return (
+        candidate.x < widget.x + widget.width &&
+        candidate.x + width > widget.x &&
+        candidate.y < widget.y + widget.height &&
+        candidate.y + height > widget.y
+      );
+    });
+
+    if (!collides) {
+      return { x: candidate.x, y: candidate.y };
+    }
+  }
+
+  return null;
+};
 
 // ─── Widget default sizes per type ─────────────────────────────────────────
 const DEFAULT_SIZES: Record<WidgetType, { width: number; height: number }> = {
@@ -137,6 +222,26 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
     set((s) => ({ pages: [...s.pages, page], activePageId: page.id }));
   },
 
+  duplicatePage: (id, name) =>
+    set((s) => {
+      const sourcePage = s.pages.find((page) => page.id === id);
+      if (!sourcePage) return s;
+
+      const duplicatedPage: DashboardPage = {
+        id: uid(),
+        name,
+        widgets: sourcePage.widgets.map((widget) => ({
+          ...widget,
+          id: uid(),
+        })),
+      };
+
+      return {
+        pages: [...s.pages, duplicatedPage],
+        activePageId: duplicatedPage.id,
+      };
+    }),
+
   removePage: (id) =>
     set((s) => {
       const remaining = s.pages.filter((p) => p.id !== id);
@@ -152,6 +257,37 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
     })),
 
   setActivePage: (id) => set({ activePageId: id }),
+
+  // ── Edit mode ──
+  isEditing: true,
+
+  setIsEditing: (editing) => set({ isEditing: editing }),
+
+  // ── Collision detection ──
+  canPlaceWidget: (x, y, width, height, bounds, excludeId) => {
+    const { pages, activePageId } = get();
+    const page = pages.find((p) => p.id === activePageId);
+    if (!page) return false;
+
+    if (x < 0 || y < 0 || x + width > bounds.width || y + height > bounds.height) {
+      return false;
+    }
+
+    // Check collision with other widgets
+    for (const widget of page.widgets) {
+      if (excludeId && widget.id === excludeId) continue;
+
+      const overlaps =
+        x < widget.x + widget.width &&
+        x + width > widget.x &&
+        y < widget.y + widget.height &&
+        y + height > widget.y;
+
+      if (overlaps) return false;
+    }
+
+    return true;
+  },
 
   // ── Widgets ──
   addWidget: (type) => {
@@ -180,6 +316,38 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
         p.id === activePageId ? { ...p, widgets: [...p.widgets, widget] } : p,
       ),
     }));
+  },
+
+  addWidgetAtPosition: (type, x, y, bounds) => {
+    const sizes = DEFAULT_SIZES[type];
+    const { pages, activePageId } = get();
+
+    const page = pages.find((p) => p.id === activePageId);
+    if (!page) return false;
+
+    const placement = findNearestPlacement(x, y, sizes.width, sizes.height, bounds, page.widgets);
+    if (!placement) return false;
+
+    const maxZ = page.widgets.reduce((m, w) => Math.max(m, w.zIndex), 0);
+
+    const widget: Widget = {
+      id: uid(),
+      type,
+      title: WIDGET_TITLES[type],
+      x: placement.x,
+      y: placement.y,
+      ...sizes,
+      collapsed: false,
+      zIndex: maxZ + 1,
+    };
+
+    set((s) => ({
+      pages: s.pages.map((p) =>
+        p.id === activePageId ? { ...p, widgets: [...p.widgets, widget] } : p,
+      ),
+    }));
+
+    return true;
   },
 
   removeWidget: (id) =>

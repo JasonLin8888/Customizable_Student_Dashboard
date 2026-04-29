@@ -5,7 +5,7 @@ import {
   ChevronUp,
   GripVertical,
 } from 'lucide-react';
-import { useDashboardStore } from '../store/dashboardStore';
+import { useDashboardStore, GRID_SIZE } from '../store/dashboardStore';
 import type { Widget } from '../types';
 
 // Widget content renderers
@@ -55,18 +55,19 @@ const MIN_W = 200;
 const MIN_H = 120;
 
 export default function WidgetFrame({ widget, canvasRef }: Props) {
-  const { updateWidget, removeWidget, bringToFront } = useDashboardStore();
+  const { updateWidget, removeWidget, bringToFront, isEditing, canPlaceWidget } = useDashboardStore();
   const frameRef = useRef<HTMLDivElement>(null);
 
   // ── Drag to move ──────────────────────────────────────────────────────────
-  const drag = useRef<{ startX: number; startY: number; wx: number; wy: number } | null>(null);
+  const drag = useRef<{ startX: number; startY: number; wx: number; wy: number; x: number; y: number } | null>(null);
 
   const onHeaderMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (!isEditing) return;
       if ((e.target as HTMLElement).closest('button')) return;
       e.preventDefault();
       bringToFront(widget.id);
-      drag.current = { startX: e.clientX, startY: e.clientY, wx: widget.x, wy: widget.y };
+      drag.current = { startX: e.clientX, startY: e.clientY, wx: widget.x, wy: widget.y, x: widget.x, y: widget.y };
 
       const onMove = (mv: MouseEvent) => {
         if (!drag.current) return;
@@ -80,9 +81,26 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
           nx = Math.max(0, Math.min(nx, canvasRect.width - widget.width));
           ny = Math.max(0, Math.min(ny, canvasRect.height - widget.height));
         }
+        drag.current.x = nx;
+        drag.current.y = ny;
         updateWidget(widget.id, { x: nx, y: ny });
       };
       const onUp = () => {
+        if (drag.current) {
+          // Snap to grid on release
+          const snappedX = Math.round(drag.current.x / GRID_SIZE) * GRID_SIZE;
+          const snappedY = Math.round(drag.current.y / GRID_SIZE) * GRID_SIZE;
+          const canvas = canvasRef.current;
+          const canvasRect = canvas?.getBoundingClientRect();
+          const bounds = canvasRect
+            ? { width: canvasRect.width, height: canvasRect.height }
+            : { width: 0, height: 0 };
+          
+          // Verify the widget still fits at the snapped position
+          if (canvasRect && canPlaceWidget(snappedX, snappedY, widget.width, widget.height, bounds, widget.id)) {
+            updateWidget(widget.id, { x: snappedX, y: snappedY });
+          }
+        }
         drag.current = null;
         window.removeEventListener('mousemove', onMove);
         window.removeEventListener('mouseup', onUp);
@@ -90,7 +108,7 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
     },
-    [widget, bringToFront, updateWidget, canvasRef],
+    [widget, bringToFront, updateWidget, canvasRef, isEditing, canPlaceWidget],
   );
 
   // ── Resize via SE corner handle ───────────────────────────────────────────
@@ -98,6 +116,7 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
 
   const onResizeMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (!isEditing) return;
       e.preventDefault();
       e.stopPropagation();
       resize.current = { startX: e.clientX, startY: e.clientY, w: widget.width, h: widget.height };
@@ -116,7 +135,7 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
       window.addEventListener('mousemove', onMove);
       window.addEventListener('mouseup', onUp);
     },
-    [widget, updateWidget],
+    [widget, updateWidget, isEditing],
   );
 
   const [editingTitle, setEditingTitle] = useState(false);
@@ -141,15 +160,20 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
         height: widget.collapsed ? 'auto' : widget.height,
         zIndex: widget.zIndex,
       }}
-      className="flex flex-col rounded-xl shadow-lg bg-white border border-gray-100 overflow-hidden select-none"
+      className={`flex flex-col rounded-xl shadow-lg bg-white border overflow-hidden select-none transition-all ${
+        isEditing ? 'border-gray-100 cursor-grab' : 'border-gray-100 cursor-default'
+      }`}
       onMouseDown={() => bringToFront(widget.id)}
+      data-widget-id={widget.id}
     >
       {/* ── Header ── */}
       <div
-        className={`flex items-center gap-1.5 px-2 py-1.5 bg-gradient-to-r ${headerGradient} cursor-grab active:cursor-grabbing shrink-0`}
+        className={`flex items-center gap-1.5 px-2 py-1.5 bg-gradient-to-r ${headerGradient} cursor-${isEditing ? 'grab' : 'default'} active:cursor-grabbing shrink-0 ${
+          isEditing ? 'opacity-100' : 'opacity-90'
+        }`}
         onMouseDown={onHeaderMouseDown}
       >
-        <GripVertical size={13} className="text-white/70 shrink-0" />
+        {isEditing && <GripVertical size={13} className="text-white/70 shrink-0" />}
         {editingTitle ? (
           <input
             autoFocus
@@ -163,8 +187,8 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
         ) : (
           <span
             className="flex-1 text-white text-xs font-semibold truncate"
-            onDoubleClick={() => setEditingTitle(true)}
-            title="Double-click to rename"
+            onDoubleClick={() => isEditing && setEditingTitle(true)}
+            title={isEditing ? 'Double-click to rename' : ''}
           >
             {widget.title}
           </span>
@@ -178,7 +202,7 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
         </button>
         <button
           onClick={() => removeWidget(widget.id)}
-          className="text-white/80 hover:text-white transition-colors"
+          className={`text-white/80 hover:text-white transition-colors ${isEditing ? 'visible' : 'hidden'}`}
           title="Remove widget"
         >
           <X size={14} />
@@ -191,14 +215,16 @@ export default function WidgetFrame({ widget, canvasRef }: Props) {
           <WidgetContent />
 
           {/* SE resize handle */}
-          <div
-            className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize"
-            onMouseDown={onResizeMouseDown}
-            style={{
-              background: 'linear-gradient(135deg, transparent 50%, #d1d5db 50%)',
-              borderRadius: '0 0 4px 0',
-            }}
-          />
+          {isEditing && (
+            <div
+              className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize"
+              onMouseDown={onResizeMouseDown}
+              style={{
+                background: 'linear-gradient(135deg, transparent 50%, #d1d5db 50%)',
+                borderRadius: '0 0 4px 0',
+              }}
+            />
+          )}
         </div>
       )}
     </div>
