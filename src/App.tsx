@@ -10,13 +10,13 @@ import {
 } from '@dnd-kit/core';
 import { Edit2, Eye } from 'lucide-react';
 import Sidebar from './components/Sidebar';
+import BottomBar from './components/BottomBar';
 import Canvas from './components/Canvas';
 import { useDashboardStore } from './store/dashboardStore';
 import type { WidgetType } from './types';
 
 export default function App() {
   const { addWidgetAtPosition, duplicatePage, renamePage, pages, activePageId, isEditing, setIsEditing } = useDashboardStore();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [draggingType, setDraggingType] = useState<WidgetType | null>(null);
   const [draggedPos, setDraggedPos] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [canvasBounds, setCanvasBounds] = useState<{ width: number; height: number } | null>(null);
@@ -25,6 +25,7 @@ export default function App() {
   const [titleDraft, setTitleDraft] = useState('');
   const [duplicateDialog, setDuplicateDialog] = useState<{ id: string; sourceName: string } | null>(null);
   const [duplicateNameDraft, setDuplicateNameDraft] = useState('');
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -59,7 +60,7 @@ export default function App() {
     }
   };
 
-  const handleSidebarAddWidget = (type: WidgetType) => {
+  const handleAddWidget = (type: WidgetType) => {
     if (!canvasBounds) {
       setError("⚠️ Canvas isn't ready yet. Try again in a moment.");
       setTimeout(() => setError(null), 3000);
@@ -105,11 +106,9 @@ export default function App() {
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="flex h-screen overflow-hidden bg-white">
-        {isEditing && !sidebarCollapsed && (
+        {/* Sidebar – always shown when editing */}
+        {isEditing && (
           <Sidebar
-            collapsed={sidebarCollapsed}
-            onToggle={() => setSidebarCollapsed((c) => !c)}
-            onAddWidget={handleSidebarAddWidget}
             onDuplicatePage={handleDuplicatePage}
           />
         )}
@@ -168,17 +167,44 @@ export default function App() {
                   </>
                 )}
               </button>
-              <span className="text-xs bg-indigo-100 text-indigo-700 rounded-full px-2 py-0.5 font-medium">
-                StudySpace
-              </span>
+              {/* Profile Icon */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowProfileMenu(!showProfileMenu)}
+                  className="w-8 h-8 bg-indigo-100 rounded-full flex items-center justify-center hover:bg-indigo-200 transition-colors"
+                  title="Profile menu"
+                >
+                  <span className="text-xs font-bold text-indigo-600">JS</span>
+                </button>
+                {showProfileMenu && (
+                  <div className="absolute right-0 mt-2 w-48 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
+                    <div className="p-3 border-b border-gray-100">
+                      <p className="text-sm font-medium text-gray-900">Jane Student</p>
+                      <p className="text-xs text-gray-500">jane@university.edu</p>
+                    </div>
+                    <button className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
+                      Settings
+                    </button>
+                    <button className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors">
+                      Logout
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           </header>
 
+          {/* Canvas */}
           <Canvas
             onDraggedPos={setDraggedPos}
             draggingType={draggingType}
             onBoundsChange={setCanvasBounds}
           />
+
+          {/* Bottom Bar – widgets palette */}
+          {isEditing && (
+            <BottomBar onAddWidget={handleAddWidget} />
+          )}
         </main>
       </div>
 

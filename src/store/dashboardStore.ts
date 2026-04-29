@@ -185,7 +185,7 @@ const findNearestPlacement = (
 };
 
 // ─── Widget default sizes per type ─────────────────────────────────────────
-const DEFAULT_SIZES: Record<WidgetType, { width: number; height: number }> = {
+export const DEFAULT_SIZES: Record<WidgetType, { width: number; height: number }> = {
   calendar:    { width: 380, height: 340 },
   todo:        { width: 320, height: 380 },
   inbox:       { width: 400, height: 360 },
@@ -431,4 +431,4 @@ export const useDashboardStore = create<DashboardStore>((set, get) => ({
   courses: seedCourses,
 }));
 
-export { WIDGET_TITLES, DEFAULT_SIZES };
+export { WIDGET_TITLES };
